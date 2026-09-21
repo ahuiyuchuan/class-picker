@@ -1,0 +1,6 @@
+# @author ahui
+# 项目隔离环境的审查/测试工具；XLS 写库仅用于构造导入测试，不进入生产依赖。
+-r requirements.txt
+xlwt==1.3.0
+ruff==0.16.8
+pip-audit==2.10.1

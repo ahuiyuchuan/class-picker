@@ -1,0 +1,7 @@
+# @author ahui
+# 保留现有文本换行字节，不在首次入库时批量改写历史源码。
+* -text whitespace=cr-at-eol
+# 远程已有许可证采用 Git 文本规范化，保持其原始提交内容。
+LICENSE text
+*.png binary
+*.ico binary

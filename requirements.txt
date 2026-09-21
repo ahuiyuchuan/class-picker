@@ -1,0 +1,6 @@
+pywebview==6.2.1
+pyinstaller==6.21.0
+setuptools==83.0.0
+openpyxl==3.1.5
+xlrd==2.0.1
+defusedxml==0.7.1
