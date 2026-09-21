@@ -10,6 +10,8 @@ const props = defineProps({
   submitLabel: { type: String, default: "保存" },
   hideSubmit: Boolean,
   disabled: Boolean,
+  // 多表导入只校验已选工作表；未选表当前展示的输入不应触发浏览器原生拦截。
+  customValidation: Boolean,
 });
 const emit = defineEmits(["close", "submit"]);
 const element = ref(null);
@@ -18,7 +20,7 @@ function key(event) {
   if (event.key !== "Tab") return;
   const items = [
     ...element.value.querySelectorAll(
-      'button:enabled,input:enabled,textarea:enabled,[tabindex="0"]',
+      'button:enabled,input:enabled,select:enabled,textarea:enabled,[tabindex="0"]',
     ),
   ];
   const first = items[0],
@@ -50,9 +52,12 @@ onBeforeUnmount(() => {
     @cancel.prevent="!busy && emit('close')"
     @keydown="key"
   >
-    <form @submit.prevent="!busy && !disabled && emit('submit')">
+    <form :novalidate="customValidation" @submit.prevent="!busy && !disabled && emit('submit')">
       <header>
-        <h2 id="modal-title">{{ title }}</h2>
+        <div class="modal-heading">
+          <h2 id="modal-title">{{ title }}</h2>
+          <slot name="subtitle" />
+        </div>
         <button
           type="button"
           class="icon-btn"
@@ -67,6 +72,8 @@ onBeforeUnmount(() => {
       <div class="modal-content"><fieldset :disabled="busy"><slot /></fieldset></div>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <footer>
+        <!-- 可选摘要槽与操作保持同一固定栏；调用方自行按 busy 冻结槽内控件。 -->
+        <slot name="footer-summary" />
         <button
           type="button"
           class="secondary-btn modal-cancel"

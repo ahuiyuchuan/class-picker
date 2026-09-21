@@ -8,10 +8,11 @@ from contextlib import contextmanager, closing
 import csv
 import io
 import json
+import re
 import secrets
 import sqlite3
 import zipfile
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from data_lock import DataLock
 
@@ -507,12 +508,36 @@ class Store:
             return self.snapshot()
 
     @staticmethod
+    def import_cell(value, number_format='General'):
+        """将缓存值转为名单文本，不计算公式或模拟完整的电子表格渲染。
+
+        value 是解析库返回的标量，None 表示空白；number_format 为文件中的格式。
+        纯零整数格式保留学号前导零，日期/时间使用无歧义的 ISO 文本；其他格式
+        保留底层值，避免按币种、百分比或显示宽度改变学号。返回字符串。
+        """
+        if value is None:
+            return ''
+        if isinstance(value, bool):
+            return 'TRUE' if value else 'FALSE'
+        if isinstance(value, (datetime, date, time)):
+            return value.isoformat(sep=' ') if isinstance(value, datetime) else value.isoformat()
+        if isinstance(value, (int, float)) and float(value).is_integer():
+            integer = int(value)
+            if re.fullmatch(r'0+', number_format):
+                return ('-' if integer < 0 else '') + str(abs(integer)).zfill(len(number_format))
+            return str(integer)
+        return str(value)
+
+    @staticmethod
     def read_file(path):
         """读取预览二维数组；CSV 回退 GB18030，确认导入由另一步事务提交。
 
         原文件最多 10 MiB，XLSX 解压声明总大小最多 64 MiB；逐行限制每表
         10001 行（含一行表头）、50 列，不信任可缺失或偏小的 XLSX 尺寸元数据。
-        XLSX 公式拒绝导入；XLS 由 xlrd 读取缓存值，不执行公式。
+        XLSX/XLS 只读取已保存的缓存值，不执行公式。普通单元格返回文本；
+        XLSX 缺少公式缓存或 Excel 错误值返回 {issue: 提示}，前端仅在选中列
+        使用该单元格时阻止提交。XLS 的空缓存无法与空文本区分，按空值校验。
+        返回全部工作表（含空表和隐藏表），保留原始行号；文件/格式错误向上传播。
         """
         path=Path(path)
         if path.stat().st_size>10*1024*1024: raise ValueError('文件请小于 10 MB')
@@ -521,7 +546,13 @@ class Store:
             with zipfile.ZipFile(path) as archive:
                 if sum(entry.file_size for entry in archive.infolist()) > 64 * 1024 * 1024:
                     raise ValueError('工作簿解压后内容过大，请拆分后导入')
-            book=load_workbook(path,read_only=True,data_only=False)
+            book=load_workbook(path,read_only=True,data_only=True)
+            try:
+                # 第二个只读视图仅识别缺失缓存的公式，不求值，也不返回公式源码。
+                formulas=load_workbook(path,read_only=True,data_only=False)
+            except Exception:
+                book.close()
+                raise
             try:
                 sheets={}
                 for sheet in book:
@@ -529,27 +560,49 @@ class Store:
                         raise ValueError('工作表最多 10000 行、50 列')
                     # 部分合法生成器不写 dimension；偏小的 dimension 也不能截断真实数据。
                     sheet.reset_dimensions()
+                    source=formulas[sheet.title]
+                    source.reset_dimensions()
                     rows=[]
-                    for row_number, cells in enumerate(sheet.iter_rows(), 1):
+                    for row_number, (cells, originals) in enumerate(zip(sheet.iter_rows(), source.iter_rows()), 1):
                         if row_number > 10001 or len(cells) > 50:
                             raise ValueError('工作表最多 10000 行、50 列')
-                        if any(c.data_type=='f' for c in cells): raise ValueError('包含公式，请转为普通值后导入')
-                        rows.append(['' if c.value is None else str(c.value) for c in cells])
+                        values=[]
+                        for cell, original in zip(cells, originals):
+                            if cell.data_type == 'e':
+                                values.append({'issue': f'单元格错误：{cell.value}'})
+                            elif original.data_type == 'f' and cell.value is None and cell.data_type != 'str':
+                                values.append({'issue': '公式结果未保存，请在 WPS/Excel 中重新计算并保存后导入'})
+                            else:
+                                values.append(Store.import_cell(cell.value, cell.number_format))
+                        rows.append(values)
                     sheets[sheet.title]=rows
                 return sheets
-            finally: book.close()
+            finally:
+                formulas.close()
+                book.close()
         if path.suffix.lower()=='.xls':
             import xlrd
-            book=xlrd.open_workbook(path, on_demand=True)
+            book=xlrd.open_workbook(path, on_demand=True, formatting_info=True)
             try:
                 sheets={}
                 for sheet in book.sheets():
                     if sheet.nrows>10001 or sheet.ncols>50: raise ValueError('工作表最多 10000 行、50 列')
-                    sheets[sheet.name]=[
-                        [str(int(cell.value)) if cell.ctype == xlrd.XL_CELL_NUMBER and cell.value.is_integer()
-                         else str(cell.value) if cell.value is not None else '' for cell in sheet.row(row)]
-                        for row in range(sheet.nrows)
-                    ]
+                    rows=[]
+                    for row in range(sheet.nrows):
+                        values=[]
+                        for cell in sheet.row(row):
+                            if cell.ctype == xlrd.XL_CELL_ERROR:
+                                values.append({'issue': f'单元格错误：{xlrd.error_text_from_code[cell.value]}'})
+                                continue
+                            value=cell.value
+                            if cell.ctype == xlrd.XL_CELL_DATE:
+                                value=xlrd.xldate_as_datetime(value, book.datemode)
+                            elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                                value=bool(value)
+                            fmt=book.format_map[book.xf_list[cell.xf_index].format_key].format_str
+                            values.append(Store.import_cell(value, fmt))
+                        rows.append(values)
+                    sheets[sheet.name]=rows
                 return sheets
             finally:
                 book.release_resources()

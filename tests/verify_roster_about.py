@@ -214,11 +214,157 @@ def run(api):
             window.create_file_dialog = original_dialog
         fill('[aria-label=数据起始行]', '3')
         wait("document.querySelectorAll('.import-preview tbody tr').length===3", "从第三行开始预览")
+        assert window.evaluate_js("document.querySelector('[aria-label=学号列]').selectedIndex===0")
+        window.evaluate_js("document.querySelector('[aria-label=学号列]').value='2'; document.querySelector('[aria-label=学号列]').dispatchEvent(new Event('change',{bubbles:true}))")
         assert window.evaluate_js("document.querySelector('.import-preview tbody').textContent.includes('202609201940') && !document.querySelector('.import-preview tbody').textContent.includes('导入说明')")
         fill('[aria-label=数据起始行]', '0')
         wait("document.querySelector('.form-error')?.textContent.includes('数据起始行')", "无效起始行校验")
         press('取消')
         wait("!document.querySelector('dialog[open]')", "取消导入")
+        # 多表交互复用真实文件桥接：独立映射、切换保留、全选与跨表重复定位。
+        from openpyxl import Workbook
+        workbook = Workbook()
+        workbook.active.title = '第一表'
+        workbook.active.append(['姓名', '学号'])
+        workbook.active.append(['导入甲', '001'])
+        other = workbook.create_sheet('第二表')
+        other.append(['001', '导入乙'])
+        workbook.create_sheet('空表')
+        multi_file = ARTIFACTS / 'multi-sheet.xlsx'
+        workbook.save(multi_file)
+        try:
+            window.create_file_dialog = lambda *args, **kwargs: (str(multi_file),)
+            press('导入名单')
+            wait("document.querySelectorAll('.import-sheet-item').length===3", "识别全部三张工作表")
+        finally:
+            window.create_file_dialog = original_dialog
+        assert window.evaluate_js("document.querySelectorAll('.import-sheet-item input:checked').length===1")
+        window.evaluate_js("document.querySelector('[aria-label=学号列]').value='2'; document.querySelector('[aria-label=学号列]').dispatchEvent(new Event('change',{bubbles:true}))")
+        press(selector='.import-sheet-item:nth-child(2) input')
+        press(selector='.import-sheet-item:nth-child(2) button')
+        fill('[aria-label=数据起始行]', '1')
+        window.evaluate_js("""for (const [label,value] of [['姓名列','2'],['学号列','1']]) {
+            const select=document.querySelector(`[aria-label=${label}]`);
+            select.value=value; select.dispatchEvent(new Event('change',{bubbles:true}));
+        }""")
+        wait("document.querySelector('.import-errors')?.textContent.includes('第二表 · 第 1 行') && document.querySelector('.import-errors')?.textContent.includes('第一表 · 第 2 行')", "跨表重复学号定位两处原行号")
+        assert window.evaluate_js("document.querySelector('dialog button[type=submit]').disabled")
+        # 清空学号映射后只导入姓名，切换回第一表确认原配置不被覆盖。
+        window.evaluate_js("document.querySelector('[aria-label=学号列]').selectedIndex=0; document.querySelector('[aria-label=学号列]').dispatchEvent(new Event('change',{bubbles:true}))")
+        wait("!document.querySelector('.import-errors')", "清空学号列解除冲突")
+        press(selector='.import-sheet-item:first-child button')
+        assert window.evaluate_js("document.querySelector('[aria-label=学号列]').value==='2' && document.querySelector('[aria-label=数据起始行]').value==='2'")
+        press('将此配置应用到其他已选表')
+        press(selector='.import-sheet-item:nth-child(2) button')
+        assert window.evaluate_js("document.querySelector('[aria-label=姓名列]').value==='1' && document.querySelector('[aria-label=数据起始行]').value==='2'")
+        fill('[aria-label=数据起始行]', '1')
+        window.evaluate_js("""for (const [label,index] of [['姓名列',2],['学号列',0]]) {
+            const select=document.querySelector(`[aria-label=${label}]`);
+            select.selectedIndex=index; select.dispatchEvent(new Event('change',{bubbles:true}));
+        }""")
+        wait("!document.querySelector('.import-errors')", "批量应用配置后仍可单独修正")
+        press(selector='.import-sheet-item:first-child button')
+        press(selector='.import-select-all input')
+        wait("document.querySelector('.import-errors')?.textContent.includes('空表')", "空工作表明确提示")
+        press(selector='.import-select-all input')
+        wait("document.querySelector('dialog button[type=submit]').disabled", "未选择工作表禁用提交")
+        press(selector='.import-sheet-item:first-child input')
+        press(selector='.import-sheet-item:nth-child(2) input')
+        for width, height in [(1280, 820), (800, 560)]:
+            window.resize(width, height)
+            time.sleep(0.2)
+            assert window.evaluate_js("""(() => {
+                const content=document.querySelector('dialog .modal-content');
+                return content.scrollWidth <= content.clientWidth + 1 &&
+                    [...document.querySelectorAll('.import-mapping select')].every(el=>el.getBoundingClientRect().width>80);
+            })()"""), '导入弹窗窄屏不得横向溢出'
+            screenshot(f'import-multi-{width}.png')
+        window.resize(1280, 820)
+        # 查看未勾选空表：起始行无效不能通过浏览器原生校验误拦截已选表提交。
+        press(selector='.import-sheet-item:nth-child(3) button')
+        press('确认导入')
+        wait("!document.querySelector('dialog[open]') && document.querySelectorAll('.roster-panel tbody tr').length===2", "多张工作表统一提交")
+        imported = [s for c in api._store.snapshot()['classes'] for s in c['students']]
+        assert [(s['name'], s['no']) for s in imported] == [('导入甲', '001'), ('导入乙', None)]
+        # 通过现有 UI 清理本用例，保持后续草稿回归的空班级前提。
+        press(selector='.roster-panel thead input[type=checkbox]')
+        press('删除选中（2）')
+        wait("document.querySelectorAll('.roster-panel tbody tr').length===0", "清理多表导入测试名单")
+        # 完整预览必须覆盖最后一页；错误位于第三页，也必须在首页阻止提交。
+        paged_file = ARTIFACTS / 'paged-import.csv'
+        paged_file.write_text('姓名,学号\n' + '\n'.join(
+            f'{"" if index == 111 else f"分页测试{index}"},{index:04d}'
+            for index in range(1, 122)), encoding='utf-8-sig')
+        try:
+            window.create_file_dialog = lambda *args, **kwargs: (str(paged_file),)
+            press('导入名单')
+            wait("document.querySelectorAll('.import-preview tbody tr').length===50", "首页只渲染50条，完整数据可分页")
+        finally:
+            window.create_file_dialog = original_dialog
+        assert window.evaluate_js("document.querySelector('dialog button[type=submit]').disabled && document.querySelector('.import-pagination').textContent.includes('121')"), '未显示页的错误仍阻止整批导入'
+        press(selector='button[aria-label="下一页"]')
+        wait("document.querySelector('.import-preview tbody tr').dataset.row==='52'", "第二页保留原始行号")
+        press(selector='button[aria-label="下一页"]')
+        wait("document.querySelectorAll('.import-preview tbody tr').length===21 && document.querySelector('button[aria-label=下一页]').disabled", "最后一页完整显示剩余21条")
+        press(selector='button[aria-label="上一页"]')
+        press(selector='button[aria-label="上一页"]')
+        press('查看问题')
+        wait("document.querySelector('[aria-label=预览页码]').value==='3' && document.activeElement.dataset.row==='112'", "查看问题跳转第三页并聚焦错误原始行")
+        assert window.evaluate_js("document.activeElement.classList.contains('import-row-error')"), '错误行高亮'
+        # 行内修正不写源文件；取消保留原值，保存后完整校验更新且留在当前页。
+        press(selector='tr[data-row="112"] button[aria-label="编辑预览行"]')
+        fill('[aria-label=预览姓名]', '修正测试')
+        assert window.evaluate_js("document.querySelector('dialog button[type=submit]').disabled && document.querySelector('[aria-label=姓名列]').matches(':disabled')"), '草稿期间冻结导入与映射'
+        press(selector='button[aria-label="取消预览编辑"]')
+        assert window.evaluate_js("document.querySelector('tr[data-row=\"112\"]').textContent.includes('缺少姓名')")
+        press(selector='tr[data-row="112"] button[aria-label="编辑预览行"]')
+        press(selector='button[aria-label="保存预览行"]')
+        wait("document.querySelector('[aria-label=预览姓名]') && document.querySelector('.import-row-message[role=alert]')", "空姓名拒绝保存，保留草稿")
+        fill('[aria-label=预览姓名]', '修正测试')
+        fill('[aria-label=预览学号]', '000111')
+        press(selector='button[aria-label="保存预览行"]')
+        wait("!document.querySelector('.import-errors') && document.querySelector('[aria-label=预览页码]').value==='3'", "修正后错误解除且保持当前页")
+        assert window.evaluate_js("document.querySelector('tr[data-row=\"112\"]').textContent.includes('000111')"), '手填学号保留前导零'
+        window.evaluate_js("document.querySelector('[aria-label=学号列]').value='2'; document.querySelector('[aria-label=学号列]').dispatchEvent(new Event('change',{bubbles:true}))")
+        wait("document.querySelector('[aria-label=预览页码]').value==='1'", "切换学号列重置页码而非修正数据")
+        press(selector='button[aria-label="下一页"]')
+        press(selector='button[aria-label="下一页"]')
+        assert window.evaluate_js("document.querySelector('tr[data-row=\"112\"]').textContent.includes('修正测试') && document.querySelector('tr[data-row=\"112\"]').textContent.includes('000111')"), '切换学号列保留已编辑姓名及学号'
+        press(selector='tr[data-row="112"] button[aria-label="移除预览行"]')
+        wait("!document.querySelector('tr[data-row=\"112\"]') && document.querySelector('.import-pagination').textContent.includes('120')", "移除更新完整预览人数")
+        press('撤销移除（1）')
+        wait("document.querySelector('tr[data-row=\"112\"]')?.textContent.includes('修正测试')", "撤销恢复行和修正")
+        screenshot('import-row-edited.png')
+        # 用新读入文件验证修正不污染源文件，后续继续覆盖原错误分页布局。
+        press('取消')
+        try:
+            window.create_file_dialog = lambda *args, **kwargs: (str(paged_file),)
+            press('导入名单')
+            wait("!!document.querySelector('.import-errors')", "重新打开源文件仍保留原始问题")
+        finally:
+            window.create_file_dialog = original_dialog
+        press('查看问题')
+        wait("document.querySelector('[aria-label=预览页码]').value==='3'", "重新定位原错误")
+        for width, height in [(1280, 820), (800, 560)]:
+            window.resize(width, height)
+            time.sleep(0.2)
+            assert window.evaluate_js("""(() => {
+                const content = document.querySelector('dialog .modal-content');
+                const preview = document.querySelector('.import-preview').getBoundingClientRect();
+                const pager = document.querySelector('.import-pagination').getBoundingClientRect();
+                const footer = document.querySelector('dialog footer').getBoundingClientRect();
+                return content.scrollHeight <= content.clientHeight + 1
+                    && content.scrollWidth <= content.clientWidth + 1
+                    && preview.height >= 60 && preview.bottom <= pager.top + 1
+                    && pager.bottom <= footer.top + 1;
+            })()"""), '分页、表格与操作栏不遮挡，外层无滚动'
+            screenshot(f'import-error-paged-{width}.png')
+        window.resize(1280, 820)
+        fill('[aria-label=数据起始行]', '113')
+        wait("document.querySelector('[aria-label=预览页码]').value==='1' && document.querySelectorAll('.import-preview tbody tr').length===10", "调整范围重置分页，末尾10条可完整预览")
+        screenshot('import-paged-valid.png')
+        press('取消')
+        wait("!document.querySelector('dialog[open]')", "分页测试取消，不写入名单")
         # 多行录入：重复追加保留输入；缺姓名、重复学号均不产生部分保存。
         draft_class = window.evaluate_js("document.querySelector('.class-trigger span').textContent.trim()")
         assert window.evaluate_js("!document.querySelector('input[aria-label=新增行数]')"), "不应展示行数输入框"
@@ -453,7 +599,7 @@ def run(api):
                     scroll.scrollTop = scroll.scrollHeight;
                     const reachable = footer.getBoundingClientRect().bottom <= scroll.getBoundingClientRect().bottom + 1;
                     scroll.scrollTop = 0;
-                    return separated && small && reachable && footer.textContent.includes('v1.0.0')
+                    return separated && small && reachable && footer.textContent.includes('v1.1.0')
                         && footer.textContent.includes('ahui') && footer.scrollWidth <= footer.clientWidth;
                 })()"""), f"{label}底部版本模块布局"
                 if width in [1280, 800]:

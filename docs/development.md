@@ -6,7 +6,7 @@
 
 ## 环境与启动
 
-技术栈为 Python、Vue 3、SQLite、pywebview，使用系统 **Microsoft Edge WebView2 Runtime**。目标平台为 Windows；当前构建在 Python 3.14.6、Node.js 20.19.0 下验证。Python 依赖固定于 requirements 文件，前端依赖由 package-lock.json 锁定。
+技术栈为 Python、Vue 3、SQLite、pywebview，使用系统 **Microsoft Edge WebView2 Runtime**。目标平台为 Windows；当前构建在 mise 管理的 Python 3.13.14、Node.js 24.18.1 下验证，Python 使用项目 `.venv`。Python 依赖固定于 requirements 文件，前端依赖由 package-lock.json 锁定。
 
 在仓库根目录使用 PowerShell：
 
@@ -45,6 +45,7 @@ powershell -ExecutionPolicy Bypass -File packaging/build_onefile.ps1
 ./.venv/Scripts/python.exe -m unittest discover -s tests -p 'test*.py'
 ./.venv/Scripts/python.exe -m ruff check backend tests --select F,E9
 ./.venv/Scripts/python.exe -m compileall -q backend tests
+node --test tests/roster_import.test.mjs
 npm --prefix frontend run build
 ./.venv/Scripts/python.exe tests/verify_audit.py
 ./.venv/Scripts/python.exe tests/verify_draw_counts.py
@@ -68,7 +69,11 @@ Remove-Item Env:CLASS_PICKER_DATA_DIR, Env:CLASS_PICKER_TEST_REPORT
 
 测试覆盖数据库事务、导入边界、抽取状态、名单维护、窗口切换及全屏页面布局。尚未覆盖跨显卡、多显示器混合 DPI 的逐帧验证；未配置独立前端 lint/类型检查，采用 Vue 构建和真实窗口回归。
 
+导入专项：`test_audit.py` 构造真实 XLSX 缓存（包括字符串、数值零、空文本、缺失和错误结果）及 XLS/CSV 文件；`roster_import.test.mjs` 使用 Node 内置测试工具，无额外依赖，覆盖完整预览和结构化错误位置。`verify_roster_about.py` 覆盖三张表识别、多选/取消全选、独立列配置与批量应用、清空学号、重复定位、查看未选空表时仍可统一提交，以及 1280/800 宽度布局。分页用例使用 121 条独立测试数据，验证每页 50 条、末页 21 条、第三页错误阻止首页提交、错误跳页聚焦以及配置变化后回到首页；同时检查表格、分页和底部操作不重叠，外层不产生双重滚动。报告目录含 `import-multi-*.png`、`import-error-paged-*.png` 和 `import-paged-valid.png`。缓存测试不启动 WPS，不证明复杂自定义格式与 WPS 显示完全一致。
+
 安装时 `lucide-vue-next@1.0.0` 会提示已弃用，当前仍可正常构建；保留锁定依赖，后续迁移到 `@lucide/vue` 时需同步验证图标导入及页面显示。
+
+预览行操作回归：Node 测试覆盖手工修正公式结果、切列保留修正与未修改字段读取新列、显式空学号、移除后原行号、源数据不变、重复学号与移除全部行。真实 WebView2 测试覆盖取消编辑、空姓名拒绝保存、保存后重新校验且保留页码、手填学号前导零、切换学号列保留修正、移除人数更新、撤销恢复修正以及重开原文件不受影响；截图为 `import-row-edited.png`。
 
 ## 目录与维护资料
 

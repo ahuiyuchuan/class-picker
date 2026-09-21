@@ -143,7 +143,7 @@ function navigateTab(event, index) {
         <!-- 共用版本信息跟随内容自然排列，切换主题始终保留，避免固定定位遮挡正文。 -->
         <footer class="about-version-footer panel" aria-label="版本信息">
           <dl>
-            <div><dt>版本</dt><dd>v1.0.0</dd></div>
+            <div><dt>版本</dt><dd>v1.1.0</dd></div>
             <div><dt>作者</dt><dd>ahui</dd></div>
             <div><dt>应用类型</dt><dd>Windows 桌面应用</dd></div>
             <div><dt>运行方式</dt><dd>免登录 · 离线使用</dd></div>

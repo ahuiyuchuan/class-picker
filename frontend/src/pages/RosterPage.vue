@@ -22,11 +22,17 @@ import {
   Trash2,
   CheckCircle2,
   MinusCircle,
+  ChevronLeft,
+  ChevronRight,
+  AlertCircle,
+  Check,
+  X,
+  Undo2,
 } from "lucide-vue-next";
 import ClassSelect from "../components/ClassSelect.vue";
 import AppDialog from "../components/AppDialog.vue";
 import RuleFields from "../components/RuleFields.vue";
-import Segmented from "../components/Segmented.vue";
+import { cellText, columnLabel, previewSheet, validateImportIssues } from "../rosterImport";
 import { state, change, call } from "../data";
 const props = defineProps({ initialId: Number });
 const emit = defineEmits(["back", "notice"]);
@@ -43,9 +49,7 @@ const form = ref({}),
   batch = ref(""),
   sheets = ref({}),
   sheet = ref(""),
-  nameCol = ref(1),
-  noCol = ref(2),
-  dataStartRow = ref(2),
+  sheetConfigs = ref({}),
   replace = ref(false),
   follow = ref(true);
 const current = computed(
@@ -100,52 +104,147 @@ watch(() => current.value?.students.map((student) => student.id), (ids = []) => 
   selectedStudents.value = selectedStudents.value.filter((id) => existing.has(id));
   if (editingId.value && !existing.has(editingId.value)) cancelEdit();
 });
-const rawRows = computed(() =>
-  modal.value === "paste"
-    ? batch.value
-        .split(/\r?\n/)
-        .filter((x) => x.trim())
-        .map((x) => [x.trim()])
-    : (sheets.value[sheet.value] || [])
-        .slice(Math.max(0, dataStartRow.value - 1))
-        .filter((r) => r.some((x) => String(x).trim())),
-);
-const importRows = computed(() =>
-  rawRows.value.map((r) => ({
-    name: String(
-      r[(modal.value === "paste" ? 1 : nameCol.value) - 1] || "",
-    ).trim(),
-    // 学号列为 0 时明确表示不导入学号，不能使用 JavaScript 的负索引语义。
-    no:
-      modal.value === "paste" || noCol.value <= 0
-        ? ""
-        : String(r[noCol.value - 1] || "").trim(),
-  })),
-);
-const importErrors = computed(() => {
-  // 行号按工作表原始行计算，先跳过说明/表头，再忽略空行。
-  if (modal.value === "import") {
-    if (!Number.isInteger(dataStartRow.value) || dataStartRow.value < 1 ||
-        dataStartRow.value > (sheets.value[sheet.value]?.length || 0))
-      return ["数据起始行请输入工作表范围内的正整数"];
-    if (!Number.isInteger(nameCol.value) || nameCol.value < 1 || nameCol.value > 50 ||
-        !Number.isInteger(noCol.value) || noCol.value < 0 || noCol.value > 50)
-      return ["请填写有效列号：姓名列 1—50，学号列 0—50"];
-  }
-  const seen = new Set(
-      replace.value
-        ? []
-        : current.value?.students.map((s) => s.no).filter(Boolean) || [],
-    ),
-    list = [];
-  importRows.value.forEach((r, i) => {
-    if (!r.name || r.name.length > 60 || r.no.length > 60)
-      list.push(`第 ${i + 1} 行：姓名缺失或字段超过 60 字`);
-    if (r.no && seen.has(r.no)) list.push(`第 ${i + 1} 行：学号 ${r.no} 重复`);
-    if (r.no) seen.add(r.no);
+// 勾选决定是否提交，当前表只决定预览；映射按表保留，避免切换时覆盖。
+const sheetNames = computed(() => Object.keys(sheets.value));
+const activeConfig = computed(() => sheetConfigs.value[sheet.value]);
+const selectedSheets = computed(() => sheetNames.value.filter((name) => sheetConfigs.value[name]?.selected));
+const sheetPreviews = computed(() => Object.fromEntries(sheetNames.value.map((name) =>
+  [name, previewSheet(name, sheets.value[name], sheetConfigs.value[name])],
+)));
+const importEntries = computed(() => modal.value === "paste"
+  ? batch.value.split(/\r?\n/).flatMap((name, index) => name.trim()
+      ? [{ sheet: "粘贴名单", row: index + 1, name: name.trim(), no: "" }] : [])
+  : selectedSheets.value.flatMap((name) => sheetPreviews.value[name].entries));
+const importRows = computed(() => importEntries.value.map(({ name, no }) => ({ name, no })));
+const previewRows = computed(() => modal.value === "paste"
+  ? importEntries.value : sheetPreviews.value[sheet.value]?.entries || []);
+// 分页仅限制 DOM 渲染量，校验和提交始终使用完整数据；切表或修改映射回到首页。
+const previewPage = ref(1), previewTable = ref(null), issueIndex = ref(0);
+// 一次仅编辑一行；草稿未保存时阻止导入、切表和翻页，避免无声丢失。
+const previewEdit = ref(null);
+const removedPreviewRows = ref([]);
+const previewPageSize = 50;
+const previewPageCount = computed(() => Math.max(1, Math.ceil(previewRows.value.length / previewPageSize)));
+const pagedPreviewRows = computed(() => previewRows.value.slice(
+  (previewPage.value - 1) * previewPageSize, previewPage.value * previewPageSize,
+));
+// 使用 Vue 的批处理时机，避免读取文件初始化期间先看到新 sheets、旧 configs。
+watch([sheet, modal, batch, () => activeConfig.value?.nameCol,
+  () => activeConfig.value?.noCol, () => activeConfig.value?.startRow], () => { previewPage.value = 1; });
+watch(previewPageCount, (count) => { previewPage.value = Math.min(previewPage.value, count); });
+watch(modal, () => { previewEdit.value = null; });
+watch(previewPage, () => { if (previewTable.value) previewTable.value.scrollTop = 0; });
+const columnOptions = computed(() => {
+  const rows = sheets.value[sheet.value] || [];
+  const width = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const header = rows[(activeConfig.value?.startRow || 1) - 2] || [];
+  return Array.from({ length: width }, (_, index) => {
+    const sample = cellText(header[index]) || cellText(rows[(activeConfig.value?.startRow || 1) - 1]?.[index]);
+    return { value: index + 1, label: `${columnLabel(index + 1)} 列${sample ? ` · ${sample.slice(0, 24)}` : ""}` };
   });
-  return list;
 });
+const importIssues = computed(() => {
+  const issues = modal.value === "import"
+    ? selectedSheets.value.flatMap((name) => sheetPreviews.value[name].issues) : [];
+  if (modal.value === "import" && !selectedSheets.value.length)
+    issues.push({ sheet: null, row: null, message: "请至少勾选一张工作表" });
+  return [...issues, ...validateImportIssues(importEntries.value, replace.value ? [] : current.value?.students || [])];
+});
+const importErrors = computed(() => importIssues.value.map((issue) => issue.message));
+const currentIssue = computed(() => importIssues.value[issueIndex.value]);
+watch(importIssues, () => { issueIndex.value = 0; });
+const issuesBySheet = computed(() => Object.fromEntries(sheetNames.value.map((name) =>
+  [name, importIssues.value.filter((issue) => issue.sheet === name)],
+)));
+const activeRowIssues = computed(() => {
+  const result = new Map();
+  for (const issue of importIssues.value.filter((item) => item.sheet === (modal.value === "paste" ? "粘贴名单" : sheet.value))) {
+    if (!issue.row) continue;
+    result.set(issue.row, [...(result.get(issue.row) || []), issue.message]);
+  }
+  return result;
+});
+/**
+ * 开启本次导入的行内草稿；另一行未保存时不覆盖用户输入。
+ * @param {Object} entry 带工作表、原始行号、姓名和学号的预览行。
+ * @returns {Promise<void>} 渲染输入框后聚焦姓名，不写入数据库。
+ */
+async function editPreviewRow(entry) {
+  if (previewEdit.value) {
+    emit("notice", "请先保存或取消当前行编辑");
+    return;
+  }
+  previewEdit.value = { ...entry, originalName: entry.name, originalNo: entry.no, nameTouched: false, noTouched: false, error: "" };
+  await nextTick();
+  previewTable.value?.querySelector('[aria-label="预览姓名"]')?.focus();
+}
+/** 保存的是内存修正；字段校验失败保留草稿，重复学号交由完整批次校验定位。 */
+function savePreviewRow() {
+  const draft = previewEdit.value;
+  if (!draft || busy.value) return;
+  const name = draft.name.trim(), no = draft.no.trim();
+  if (!name || name.length > 60 || no.length > 60) {
+    draft.error = "姓名必填，姓名和学号均不得超过 60 字";
+    return;
+  }
+  const config = sheetConfigs.value[draft.sheet];
+  config.edits ||= {};
+  // 显式输入（包括将缺缓存的学号清空）也算修正；未操作的另一字段继续跟随列映射。
+  const edit = { ...config.edits[draft.row] };
+  if (draft.nameTouched || name !== draft.originalName) edit.name = name;
+  if (draft.noTouched || no !== draft.originalNo) edit.no = no;
+  config.edits[draft.row] = edit;
+  previewEdit.value = null;
+}
+/**
+ * 移除只排除本次导入的原始行，保留源行号；撤销按后进先出恢复，不修改原文件。
+ * @param {Object} entry 需要排除的预览行，包含 sheet 和原始 row。
+ */
+function removePreviewRow(entry) {
+  if (busy.value || previewEdit.value) return;
+  const config = sheetConfigs.value[entry.sheet];
+  config.removedRows ||= [];
+  config.removedRows.push(entry.row);
+  removedPreviewRows.value.push({ sheet: entry.sheet, row: entry.row });
+}
+/** 恢复最近移除的行及其已有修正，完整批次重新校验；不自动勾选工作表。 */
+function undoPreviewRemoval() {
+  if (busy.value || previewEdit.value) return;
+  const entry = removedPreviewRows.value.pop();
+  if (!entry) return;
+  const config = sheetConfigs.value[entry.sheet];
+  config.removedRows = config.removedRows.filter((row) => row !== entry.row);
+}
+/** 定位当前问题，跨工作表及分页后聚焦原始行；配置错误聚焦配置区域，不修改选择。 */
+async function locateImportIssue() {
+  const issue = currentIssue.value;
+  if (!issue) return;
+  if (issue.sheet && modal.value === "import") sheet.value = issue.sheet;
+  await nextTick();
+  const index = previewRows.value.findIndex((entry) => entry.row === issue.row);
+  if (index >= 0) {
+    previewPage.value = Math.floor(index / previewPageSize) + 1;
+    await nextTick();
+    const row = previewTable.value?.querySelector(`[data-row="${issue.row}"]`);
+    row?.scrollIntoView({ block: "center" });
+    row?.focus({ preventScroll: true });
+  } else {
+    document.querySelector(issue.sheet ? '.import-mapping input' : '.import-select-all input')?.focus();
+  }
+}
+/**
+ * 全选包含空表，空表会明确报告无有效数据；不会静默跳过用户勾选的表。
+ * @param {boolean} selected true 全选，false 取消全选；仅作用于本次打开的文件。
+ */
+function selectAllSheets(selected) {
+  for (const config of Object.values(sheetConfigs.value)) config.selected = selected;
+}
+/** 仅复制映射和起始行；各表选择状态独立，宽度不同的目标表仍须通过校验。 */
+function applySheetMapping() {
+  const { nameCol, noCol, startRow } = activeConfig.value;
+  for (const name of selectedSheets.value.filter((value) => value !== sheet.value))
+    Object.assign(sheetConfigs.value[name], { nameCol, noCol, startRow });
+}
 const title = computed(
   () =>
     ({
@@ -331,7 +430,7 @@ async function submit() {
       await change("delete_class", { class_id: cid });
       delete newRowsByClass.value[cid];
     } else if (["paste", "import"].includes(modal.value)) {
-      if (!importRows.value.length || importErrors.value.length)
+      if (!importRows.value.length || importErrors.value.length || previewEdit.value)
         throw new Error("请先修正预览中的问题");
       await change("import", {
         class_id: cid,
@@ -357,6 +456,10 @@ async function submit() {
     busy.value = false;
   }
 }
+/**
+ * 读取文件并初始化每张表的独立配置；取消选文件不改变当前界面。
+ * @returns {Promise<void>} 成功打开预览，读取失败显示提示；始终释放忙碌锁。
+ */
 async function chooseImport() {
   if (busy.value) return;
   busy.value = true;
@@ -364,11 +467,14 @@ async function chooseImport() {
     const value = await call("choose_import");
     if (value) {
       sheets.value = value;
-      sheet.value = Object.keys(value)[0];
-      dataStartRow.value = 2;
+      previewEdit.value = null;
+      removedPreviewRows.value = [];
+      sheet.value = Object.keys(value).find((name) => value[name].some((row) =>
+        row.some((cell) => cell?.issue || cellText(cell)))) || Object.keys(value)[0];
+      sheetConfigs.value = Object.fromEntries(Object.keys(value).map((name) => [name, {
+        selected: name === sheet.value, startRow: 2, nameCol: 1, noCol: null,
+      }]));
       replace.value = false;
-      nameCol.value = 1;
-      noCol.value = 2;
       // 文件读取使用 busy 锁；在 finally 解锁前直接切换到预览态。
       error.value = "";
       modal.value = "import";
@@ -665,14 +771,16 @@ async function move(direction) {
       :title="title"
       :busy="busy"
       :error="error"
+      :custom-validation="modal === 'import'"
       :wide="['import', 'paste', 'rules'].includes(modal)"
       :class="{
         'rules-dialog': modal === 'rules',
+        'import-dialog': modal === 'import',
         'class-action-dialog': ['newClass', 'rules', 'rename', 'deleteClass'].includes(modal),
       }"
       :disabled="
         ['paste', 'import'].includes(modal) &&
-        (!importRows.length || !!importErrors.length)
+        (!importRows.length || !!importErrors.length || !!previewEdit)
       "
       :submit-label="
         modal === 'leaveEdit' ? '放弃修改'
@@ -687,6 +795,19 @@ async function move(direction) {
       @close="modal = ''"
       @submit="submit"
     >
+      <template v-if="modal === 'import'" #subtitle>
+        <p class="import-subtitle">导入到 {{ current.name }}</p>
+      </template>
+      <template v-if="modal === 'import'" #footer-summary>
+        <div class="import-footer-summary">
+          <p role="status">已选 {{ selectedSheets.length }} 张工作表，共 {{ importRows.length }} 人</p>
+          <label class="check-field"><input v-model="replace" :disabled="busy" type="checkbox" />替换当前名单
+            <span>清空本轮进度，保留历史；导入前自动备份</span>
+          </label>
+          <p v-if="importErrors.length" class="danger-text">请先处理所选工作表中的错误</p>
+          <p v-if="previewEdit" class="danger-text">请先保存或取消行内编辑</p>
+        </div>
+      </template>
       <p v-if="modal === 'leaveDrafts'">有未保存的学生信息，离开将丢弃新增草稿和当前行编辑。已保存的名单不受影响。</p>
       <p v-if="modal === 'leaveEdit'">当前行修改尚未保存，继续将丢弃本行修改。</p>
       <p v-if="modal === 'discardDrafts'">将清除本班未保存的新增行，已保存的学生不受影响。</p>
@@ -713,7 +834,26 @@ async function move(direction) {
           当前跟随全局设置，下面内容仅供查看。
         </p></template
       >
-      <template v-if="['paste', 'import'].includes(modal)">
+      <div v-if="['paste', 'import'].includes(modal)" :class="modal === 'import' ? 'import-workspace' : 'paste-workspace'">
+        <aside v-if="modal === 'import'" class="import-sidebar">
+          <div class="import-sheet-actions"><strong>工作表</strong><span>已选 {{ selectedSheets.length }}/{{ sheetNames.length }}</span></div>
+          <label class="check-field import-select-all">
+            <input type="checkbox" :disabled="!!previewEdit" :checked="selectedSheets.length === sheetNames.length"
+              :indeterminate="selectedSheets.length > 0 && selectedSheets.length < sheetNames.length"
+              @change="selectAllSheets($event.target.checked)" />全选
+          </label>
+          <div class="import-sheet-list" aria-label="选择导入工作表">
+            <div v-for="name in sheetNames" :key="name" class="import-sheet-item" :class="{ active: sheet === name }">
+              <input v-model="sheetConfigs[name].selected" :disabled="!!previewEdit" type="checkbox" :aria-label="`导入工作表 ${name}`" />
+              <button type="button" class="text-button" :disabled="!!previewEdit" :aria-pressed="sheet === name" @click="sheet = name">
+                <span>{{ name }}</span>
+                <small v-if="issuesBySheet[name]?.length" class="danger-text"><AlertCircle :size="13" />{{ issuesBySheet[name].length }} 处错误</small>
+                <small v-else>{{ sheetPreviews[name].entries.length }} 人</small>
+              </button>
+            </div>
+          </div>
+        </aside>
+        <section class="import-main">
         <label v-if="modal === 'paste'" class="field"
           >每行一个姓名（同名不自动合并）<textarea
             v-model="batch"
@@ -721,57 +861,101 @@ async function move(direction) {
             placeholder="李小红&#10;王强"
           ></textarea>
         </label>
-        <template v-else
-          ><Segmented
-            v-model="sheet"
-            label="工作表"
-            :options="Object.keys(sheets).map((k) => [k, k])"
-          />
-          <div class="import-mapping">
-            <label
-              >姓名在第
-              <input v-model.number="nameCol" type="number" min="1" max="50" />
-              列</label
-            ><label
-              >学号在第
-              <input v-model.number="noCol" type="number" min="0" max="50" />
-              列（0 表示无学号）</label
-            ><label
-              >数据从第 <input v-model.number="dataStartRow" type="number" min="1" :max="sheets[sheet]?.length || 1" aria-label="数据起始行" /> 行开始</label
-            >
-          </div></template
-        >
-        <label class="check-field"
+        <fieldset v-else-if="activeConfig" class="import-config" :disabled="!!previewEdit">
+            <p class="import-sheet-title"><strong>{{ sheet }}</strong><span>{{ previewRows.length }} 人<span v-if="!activeConfig.selected"> · 未选中</span></span></p>
+            <div class="import-mapping">
+              <label>姓名列（必选）
+                <select v-model="activeConfig.nameCol" aria-label="姓名列">
+                  <option :value="null">请选择姓名列</option>
+                  <option v-for="column in columnOptions" :key="column.value" :value="column.value">{{ column.label }}</option>
+                </select>
+              </label>
+              <label>学号列（选填）
+                <select v-model="activeConfig.noCol" aria-label="学号列">
+                  <option :value="null">不导入学号</option>
+                  <option v-for="column in columnOptions" :key="column.value" :value="column.value">{{ column.label }}</option>
+                </select>
+              </label>
+              <label>数据起始行
+                <input v-model.number="activeConfig.startRow" type="number" min="1" :max="sheets[sheet]?.length || 1" aria-label="数据起始行" />
+              </label>
+            </div>
+            <div v-if="selectedSheets.length > 1" class="import-mapping-action">
+              <button type="button" class="text-button" @click="applySheetMapping">将此配置应用到其他已选表</button>
+            </div>
+        </fieldset>
+        <label v-if="modal === 'paste'" class="check-field"
           ><input
             v-model="replace"
             type="checkbox"
           />替换当前名单（清空本轮进度，保留历史；先自动备份）</label
         >
-        <p class="muted">
-          共 {{ importRows.length }} 行；预览前 20 行。学号选填，留空保存为空；同名会作为不同学生保留。
+        <p v-if="modal === 'paste'" class="muted" role="status">
+          共 {{ importRows.length }} 人，导入「{{ current.name }}」。
         </p>
-        <div v-if="importErrors.length" class="form-error">
-          {{ importErrors.slice(0, 5).join("；") }}
+        <div v-if="currentIssue" class="form-error import-errors" role="alert">
+          <AlertCircle :size="16" />
+          <span>{{ currentIssue.message }}</span>
+          <button v-if="currentIssue.sheet" type="button" class="text-button" :disabled="!!previewEdit" @click="locateImportIssue">查看问题</button>
+          <div v-if="importIssues.length > 1" class="import-issue-nav">
+            <button type="button" class="icon-btn" aria-label="上一处问题" title="上一处问题" :disabled="issueIndex === 0" @click="issueIndex--"><ChevronLeft :size="16" /></button>
+            <small>{{ issueIndex + 1 }}/{{ importIssues.length }}</small>
+            <button type="button" class="icon-btn" aria-label="下一处问题" title="下一处问题" :disabled="issueIndex === importIssues.length - 1" @click="issueIndex++"><ChevronRight :size="16" /></button>
+          </div>
         </div>
-        <div class="import-preview">
+        <div class="import-preview-title"><strong>数据预览</strong><span>共 {{ previewRows.length }} 条</span>
+          <button v-if="modal === 'import' && removedPreviewRows.length" type="button" class="text-button" :disabled="!!previewEdit" @click="undoPreviewRemoval"><Undo2 :size="14" />撤销移除（{{ removedPreviewRows.length }}）</button>
+        </div>
+        <div ref="previewTable" class="import-preview" tabindex="0" aria-label="数据预览表格">
           <table>
             <thead>
               <tr>
-                <th>行</th>
+                <th>原始行号</th>
                 <th>姓名</th>
                 <th>学号</th>
+                <th v-if="modal === 'import'" class="preview-actions-column">操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(r, i) in importRows.slice(0, 20)" :key="i">
-                <td>{{ i + 1 }}</td>
-                <td>{{ r.name || "（缺少姓名）" }}</td>
-                <td>{{ r.no || "—" }}</td>
+              <tr v-for="r in pagedPreviewRows" :key="r.row" :data-row="r.row" tabindex="-1" :class="{ 'import-row-error': activeRowIssues.has(r.row) }">
+                <td>{{ r.row }}</td>
+                <td>
+                  <input v-if="previewEdit?.sheet === r.sheet && previewEdit?.row === r.row" v-model="previewEdit.name" class="table-input" aria-label="预览姓名" @input="previewEdit.nameTouched = true" @keydown.enter.prevent="!$event.isComposing && savePreviewRow()" @keydown.esc.stop.prevent="previewEdit = null" />
+                  <template v-else>{{ r.name || "（缺少姓名）" }}</template>
+                  <small v-if="previewEdit?.sheet === r.sheet && previewEdit?.row === r.row && previewEdit.error" class="import-row-message" role="alert">{{ previewEdit.error }}</small>
+                  <small v-else-if="activeRowIssues.has(r.row)" class="import-row-message">{{ activeRowIssues.get(r.row).join('；') }}</small>
+                </td>
+                <td>
+                  <input v-if="previewEdit?.sheet === r.sheet && previewEdit?.row === r.row" v-model="previewEdit.no" class="table-input" aria-label="预览学号" @input="previewEdit.noTouched = true" @keydown.enter.prevent="!$event.isComposing && savePreviewRow()" @keydown.esc.stop.prevent="previewEdit = null" />
+                  <template v-else>{{ r.no || "—" }}</template>
+                </td>
+                <td v-if="modal === 'import'">
+                  <div class="preview-row-actions">
+                    <template v-if="previewEdit?.sheet === r.sheet && previewEdit?.row === r.row">
+                      <button type="button" class="icon-btn small" aria-label="保存预览行" title="保存" @click="savePreviewRow"><Check :size="16" /></button>
+                      <button type="button" class="icon-btn small" aria-label="取消预览编辑" title="取消" @click="previewEdit = null"><X :size="16" /></button>
+                    </template>
+                    <template v-else>
+                      <button type="button" class="icon-btn small" aria-label="编辑预览行" title="编辑" :disabled="!!previewEdit" @click="editPreviewRow(r)"><Pencil :size="16" /></button>
+                      <button type="button" class="icon-btn small" aria-label="移除预览行" title="从本次导入移除" :disabled="!!previewEdit" @click="removePreviewRow(r)"><Trash2 :size="16" /></button>
+                    </template>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
+          <p v-if="!previewRows.length" class="import-empty">暂无可预览数据</p>
         </div>
-      </template>
+        <nav class="import-pagination" aria-label="预览分页">
+          <span>每页 50 条 · {{ previewRows.length ? (previewPage - 1) * previewPageSize + 1 : 0 }}–{{ Math.min(previewPage * previewPageSize, previewRows.length) }} / {{ previewRows.length }} 条</span>
+          <div>
+            <button type="button" class="icon-btn" aria-label="上一页" title="上一页" :disabled="!!previewEdit || previewPage === 1" @click="previewPage--"><ChevronLeft :size="18" /></button>
+            <label><input :value="previewPage" :disabled="!!previewEdit" aria-label="预览页码" type="number" min="1" :max="previewPageCount" @keydown.enter.prevent="$event.target.blur()" @change="previewPage = Math.min(previewPageCount, Math.max(1, Math.trunc(Number($event.target.value) || 1))); $event.target.value = previewPage" /> / {{ previewPageCount }} 页</label>
+            <button type="button" class="icon-btn" aria-label="下一页" title="下一页" :disabled="!!previewEdit || previewPage >= previewPageCount" @click="previewPage++"><ChevronRight :size="18" /></button>
+          </div>
+        </nav>
+        </section>
+      </div>
     </AppDialog>
   </div>
 </template>

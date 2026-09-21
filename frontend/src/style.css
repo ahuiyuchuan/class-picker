@@ -1593,12 +1593,105 @@ summary:focus-visible {
 .import-mapping input[type="number"] {
   width: 64px;
 }
-.import-mapping > label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* 映射控件按弹窗宽度换行，长表名/表头不撑开弹窗；选中状态同时提供文字与语义。 */
+.import-mapping > label { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; flex: 1 1 150px; }
+.import-mapping select { width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: white; }
 .import-preview {
   max-height: 240px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+/* 导入固定标题/操作栏，中间两栏独立分配剩余高度；分页只渲染 50 行。
+ * 样式限定在导入弹窗，不改变名单页、规则弹窗或其他管理页面的视觉约定。
+ */
+.app-dialog.import-dialog {
+  width: min(1080px, calc(100vw - 32px));
+  border-radius: 8px;
+  color: #253047;
+}
+.import-dialog::backdrop { background: #27314166; }
+.import-dialog form { height: min(720px, calc(100dvh - 34px)); }
+.import-dialog .modal-heading { min-width: 0; }
+.import-dialog h2 { font-size: 20px; }
+.import-subtitle { margin: 8px 0 0; font-size: 14px; color: #626d80; overflow-wrap: anywhere; }
+.import-dialog .modal-content { flex: 1; padding: 0; overflow: hidden; }
+.import-dialog .modal-content > fieldset { height: 100%; min-height: 0; }
+.import-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); height: 100%; min-height: 0; }
+.import-sidebar { display: flex; flex-direction: column; min-height: 0; padding: 20px 14px; background: #fafbfd; border-right: 1px solid #e5e8ed; }
+.import-sheet-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; }
+.import-sheet-actions > span { color: #626d80; font-size: 13px; }
+.import-select-all { margin: 16px 8px 10px; }
+.import-sheet-list { flex: 1; min-height: 0; overflow: auto; }
+.import-sheet-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-left: 2px solid transparent; border-radius: 4px; }
+.import-sheet-item.active { border-left-color: #0873ec; background: #eaf2ff; }
+.import-sheet-item > input { flex: none; width: 16px; height: 16px; margin: 5px 0 0; accent-color: #0873ec; }
+.import-sheet-item button { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; flex: 1; min-width: 0; padding: 0; text-align: left; color: inherit; font-size: 14px; font-weight: 500; }
+.import-sheet-item button > span { display: block; overflow-wrap: anywhere; line-height: 1.6; }
+.import-sheet-item small { display: flex; align-items: center; gap: 4px; margin-top: 4px; color: #626d80; font-size: 12px; font-weight: 400; }
+.import-sheet-item .danger-text { color: #a52b38; }
+.import-main { min-width: 0; min-height: 0; }
+.import-dialog .import-main { display: flex; flex-direction: column; padding: 16px 20px 0; }
+.import-config { flex: none; border-bottom: 1px solid #e5e8ed; padding-bottom: 10px; }
+.import-sheet-title { display: flex; justify-content: space-between; gap: 12px; margin: 0; font-size: 15px; line-height: 1.6; }
+.import-sheet-title strong { min-width: 0; overflow-wrap: anywhere; }
+.import-sheet-title > span { flex: none; color: #626d80; font-size: 13px; }
+.import-dialog .import-mapping { display: grid; grid-template-columns: 1fr 1fr 0.75fr; margin: 14px 0 4px; }
+.import-dialog .import-mapping select,
+.import-dialog .import-mapping input { width: 100%; height: 36px; border-radius: 6px; padding: 6px 10px; color: #253047; border-color: #d6dce6; font-size: 14px; }
+.import-mapping-action { display: flex; justify-content: flex-end; min-height: 36px; align-items: center; }
+.import-mapping-action .text-button { font-size: 12px; font-weight: 400; padding: 6px 0; }
+.import-preview-title { display: flex; gap: 12px; align-items: center; margin: 14px 0; font-size: 14px; flex: none; }
+.import-preview-title > span { font-size: 12px; color: #626d80; }
+.import-dialog .import-preview { flex: 1; min-height: 0; max-height: none; border: 0; border-radius: 4px; scrollbar-gutter: stable; scroll-padding-top: 42px; }
+.import-dialog .import-preview table { table-layout: fixed; font-size: 14px; }
+.import-dialog .import-preview th { position: sticky; top: 0; z-index: 1; background: #f2f4f7; color: #536075; font-size: 13px; }
+.import-dialog .import-preview th:first-child { width: 100px; }
+.import-dialog .import-preview th:nth-child(2) { width: auto; }
+.import-dialog .import-preview th:nth-child(3) { width: 30%; }
+.import-dialog .import-preview th.preview-actions-column { width: 90px; }
+.preview-row-actions { display: flex; align-items: center; gap: 6px; }
+.preview-row-actions .icon-btn { flex: none; }
+.import-preview .table-input { width: 100%; min-width: 0; }
+.import-preview-title > button { margin-left: auto; font-size: 12px; }
+.import-dialog .import-preview th,
+.import-dialog .import-preview td { padding: 9px 12px; height: 38px; overflow-wrap: anywhere; }
+.import-dialog .import-preview td { border-bottom: 1px solid #edf0f4; }
+.import-dialog .import-preview tbody tr:hover { background: #f8fafc; }
+.import-preview .import-row-error,
+.import-dialog .import-preview .import-row-error:hover { color: #a52b38; background: #fff1f3; }
+.import-row-message { display: block; font-size: 12px; line-height: 1.5; margin-top: 4px; overflow-wrap: anywhere; }
+.import-empty { padding: 24px; text-align: center; color: #626d80; font-size: 14px; }
+.import-errors { display: flex; align-items: center; gap: 8px; flex: none; margin: 10px 0 0; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.import-errors > svg { flex: none; }
+.import-errors > span { flex: 1; min-width: 0; max-height: 64px; overflow: auto; overflow-wrap: anywhere; }
+.import-errors > button { flex: none; font-size: 12px; padding: 4px; }
+.import-issue-nav { display: flex; align-items: center; flex: none; gap: 4px; }
+.import-issue-nav .icon-btn { width: 24px; height: 28px; padding: 0; }
+.import-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; flex: none; padding: 10px 0; font-size: 12px; color: #626d80; }
+.import-pagination > div { display: flex; gap: 8px; align-items: center; }
+.import-pagination .icon-btn { width: 30px; height: 30px; padding: 4px; border-radius: 6px; }
+.import-pagination input { width: 48px; height: 30px; border: 1px solid #d6dce6; border-radius: 4px; text-align: center; font: inherit; color: #253047; }
+.import-dialog footer { align-items: center; padding: 14px 20px; gap: 10px; }
+.import-dialog footer > button { flex: none; border-radius: 6px; min-width: 96px; }
+.import-footer-summary { flex: 1; min-width: 0; font-size: 13px; }
+.import-footer-summary p { margin: 0 0 6px; }
+.import-footer-summary .check-field { flex-wrap: wrap; gap: 6px; margin: 0; font-size: 12px; }
+.import-footer-summary .check-field span { color: #626d80; }
+.import-footer-summary .danger-text { margin: 6px 0 0; font-size: 12px; }
+@media (max-width: 900px) {
+  .import-workspace { grid-template-columns: 170px minmax(0, 1fr); }
+  .import-sidebar { padding: 14px 10px; }
+  .import-dialog .import-main { padding: 12px 14px 0; }
+  .import-dialog .import-mapping { gap: 8px; }
+  .import-dialog footer { padding: 12px 16px; }
+}
+@media (max-height: 650px) {
+  .import-dialog header { padding: 12px 20px; }
+  .import-subtitle { margin-top: 4px; }
+  .import-dialog .import-mapping { margin-top: 8px; }
+  .import-preview-title { margin: 8px 0; }
+  .import-pagination { padding: 6px 0; }
 }
 .exclusion-list {
   max-height: 260px;

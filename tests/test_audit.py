@@ -45,6 +45,63 @@ class AuditTests(unittest.TestCase):
             Store.read_file(path)["名单"], [["姓名", "学号"], ["测试学生", "0001"]]
         )
 
+    def test_formula_cache_and_all_sheets(self):
+        """读取缓存而非计算公式；缺失/错误缓存定位，隐藏和空工作表也不遗漏。"""
+        from openpyxl import Workbook
+        from xml.etree import ElementTree as ET
+
+        book = Workbook()
+        sheet = book.active
+        sheet.title = "公式名单"
+        sheet.append(["姓名", "学号", "备注"])
+        sheet.append(['="测试甲"', "=1+1", "=1/0"])
+        sheet["B2"].number_format = "00000"
+        sheet.append(['="未保存"', "=0", '=""'])
+        book.create_sheet("空表")
+        book.create_sheet("隐藏名单").sheet_state = "hidden"
+        path = Path(self.temp.name) / "cached.xlsx"
+        book.save(path)
+        # openpyxl 不计算公式；使用 XML 构造软件已保存的结果，故意让缓存与公式不同。
+        with zipfile.ZipFile(path) as archive:
+            contents = {name: archive.read(name) for name in archive.namelist()}
+        ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        root = ET.fromstring(contents["xl/worksheets/sheet1.xml"])
+        for address, kind, value in [("A2", "str", "测试甲"), ("B2", "n", "7"),
+                                     ("C2", "e", "#DIV/0!"), ("B3", "n", "0"), ("C3", "str", "")]:
+            cell = root.find(f".//s:c[@r='{address}']", ns)
+            cell.set("t", kind)
+            cell.find("s:v", ns).text = value
+        contents["xl/worksheets/sheet1.xml"] = ET.tostring(root, encoding="utf-8")
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, content in contents.items():
+                archive.writestr(name, content)
+        result = Store.read_file(path)
+        self.assertEqual(list(result), ["公式名单", "空表", "隐藏名单"])
+        self.assertEqual(result["公式名单"][1][:2], ["测试甲", "00007"])
+        self.assertIn("#DIV/0!", result["公式名单"][1][2]["issue"])
+        self.assertIn("公式结果未保存", result["公式名单"][2][0]["issue"])
+        self.assertEqual(result["公式名单"][2][1:], ["0", ""])
+        self.assertEqual(result["空表"], [])
+
+    def test_xls_formats_and_csv_literal_formula(self):
+        """两种 Excel 保留纯零学号格式；CSV 的公式样文本始终原样读取。"""
+        import xlwt
+
+        book = xlwt.Workbook()
+        sheet = book.add_sheet("名单")
+        sheet.write(0, 0, "测试甲")
+        sheet.write(0, 1, 7, xlwt.easyxf(num_format_str="00000"))
+        sheet.write(0, 2, xlwt.Formula("1+1"))
+        book.add_sheet("空表")
+        path = Path(self.temp.name) / "format.xls"
+        book.save(str(path))
+        result = Store.read_file(path)
+        self.assertEqual(list(result), ["名单", "空表"])
+        self.assertEqual(result["名单"][0], ["测试甲", "00007", ""])
+        csv_path = Path(self.temp.name) / "literal.csv"
+        csv_path.write_text("=1+1,00007\n", encoding="utf-8-sig")
+        self.assertEqual(Store.read_file(csv_path)["CSV"], [["=1+1", "00007"]])
+
     def test_xlsx_without_dimensions_rejects_wide_rows(self):
         """缺少尺寸元数据也不能绕过 50 列限制。"""
         from openpyxl import Workbook
