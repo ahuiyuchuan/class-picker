@@ -838,6 +838,20 @@ button svg {
   white-space: nowrap;
 }
 .about-version-footer dd { margin: 0; }
+.about-version-footer .about-github {
+  min-width: 0;
+  white-space: normal;
+}
+.about-version-footer .about-github dd { min-width: 0; }
+.about-version-footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--primary);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.about-version-footer a:hover { text-decoration: underline; }
 .about-feature-panel {
   display: grid;
   grid-template-columns: minmax(250px, .85fr) minmax(0, 2.15fr);

@@ -13,6 +13,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+APP_VERSION = json.loads((ROOT / "frontend/package.json").read_text(encoding="utf-8"))["version"]
 sys.path.insert(0, str(ROOT / "backend"))
 ARTIFACTS = Path(tempfile.mkdtemp(prefix="roster-about-", dir=ROOT.parent))
 os.environ["CLASS_PICKER_DATA_DIR"] = str(ARTIFACTS / "data")
@@ -599,9 +600,9 @@ def run(api):
                     scroll.scrollTop = scroll.scrollHeight;
                     const reachable = footer.getBoundingClientRect().bottom <= scroll.getBoundingClientRect().bottom + 1;
                     scroll.scrollTop = 0;
-                    return separated && small && reachable && footer.textContent.includes('v1.1.0')
+                    return separated && small && reachable && footer.textContent.includes(__VERSION__)
                         && footer.textContent.includes('ahui') && footer.scrollWidth <= footer.clientWidth;
-                })()"""), f"{label}底部版本模块布局"
+                })()""".replace("__VERSION__", json.dumps(f"v{APP_VERSION}"))), f"{label}底部版本模块布局"
                 if width in [1280, 800]:
                     screenshot(f"about-{name}-{width}.png")
             press("功能介绍")
